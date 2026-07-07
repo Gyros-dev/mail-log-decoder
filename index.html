@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mail Log MIME Decoder</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --panel: #171a21;
+      --panel-2: #20242d;
+      --text: #f2f4f8;
+      --muted: #aab1bf;
+      --border: #303644;
+      --accent: #7aa2ff;
+      --ok: #75d38a;
+      --danger: #ff7a7a;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      --sans: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: var(--sans);
+      background: radial-gradient(circle at top, #1b2130 0, var(--bg) 42%);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    .wrap {
+      width: min(1200px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 32px 0 48px;
+    }
+
+    header {
+      margin-bottom: 22px;
+    }
+
+    h1 {
+      font-size: clamp(28px, 4vw, 44px);
+      line-height: 1.05;
+      margin: 0 0 10px;
+      letter-spacing: -0.04em;
+    }
+
+    .lead {
+      color: var(--muted);
+      margin: 0;
+      max-width: 760px;
+      line-height: 1.5;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    @media (max-width: 850px) {
+      .grid { grid-template-columns: 1fr; }
+    }
+
+    .card {
+      background: color-mix(in srgb, var(--panel) 92%, transparent);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      overflow: hidden;
+      box-shadow: 0 20px 60px rgba(0,0,0,.25);
+    }
+
+    .card-head {
+      padding: 14px 16px;
+      background: rgba(255,255,255,.03);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .card-title {
+      font-weight: 700;
+    }
+
+    textarea, pre {
+      width: 100%;
+      min-height: 520px;
+      border: 0;
+      margin: 0;
+      padding: 16px;
+      background: transparent;
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 13px;
+      line-height: 1.55;
+      resize: vertical;
+      outline: none;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    pre {
+      background: var(--panel);
+      overflow: auto;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin: 16px 0;
+    }
+
+    button {
+      appearance: none;
+      border: 1px solid var(--border);
+      background: var(--panel-2);
+      color: var(--text);
+      border-radius: 999px;
+      padding: 10px 14px;
+      cursor: pointer;
+      font-weight: 650;
+      transition: .15s ease;
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+      border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
+    }
+
+    button.primary {
+      background: var(--accent);
+      color: #061022;
+      border-color: transparent;
+    }
+
+    .hint {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 12px;
+      line-height: 1.45;
+    }
+
+    .status {
+      color: var(--ok);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    mark {
+      background: rgba(122,162,255,.22);
+      color: var(--text);
+      border-radius: 4px;
+      padding: 0 2px;
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <header>
+      <h1>Mail Log MIME Decoder</h1>
+      <p class="lead">
+        Вставьте логи Postfix/SMTP. Сервис декодирует MIME encoded-word заголовки RFC 2047,
+        например <code>=?utf-8?Q?...?=</code> и <code>=?utf-8?B?...?=</code>, включая разбитые на части Subject.
+      </p>
+    </header>
+
+    <div class="actions">
+      <button class="primary" id="decodeBtn">Декодировать</button>
+      <button id="copyBtn">Скопировать результат</button>
+      <button id="clearBtn">Очистить</button>
+      <button id="sampleBtn">Вставить пример</button>
+      <span class="status" id="status"></span>
+    </div>
+
+    <section class="grid">
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">Исходные логи</span>
+        </div>
+        <textarea id="input" spellcheck="false" placeholder="Вставьте сюда строки логов..."></textarea>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">Декодированный результат</span>
+        </div>
+        <pre id="output"></pre>
+      </div>
+    </section>
+
+    <p class="hint">
+      Работает полностью в браузере. Ничего никуда не отправляется. Можно разместить как обычный статический сайт на GitHub Pages.
+    </p>
+  </main>
+
+  <script>
+    const input = document.getElementById('input');
+    const output = document.getElementById('output');
+    const statusEl = document.getElementById('status');
+
+    const sample = `"2026-06-14T06:02:23.441Z","94.140.212.24","0 2026-06-14T09:02:23.441179+03:00 relay postfix 25295  6A34D82643: info: header Subject: =?utf-8?Q?=D0=9E=D1=82=D0=BC=D0=B5=D0=BD=D0=B0_=D0=B7?=? =?utf-8?Q?=D0=B0=D0=BA=D0=B0=D0=B7=D0=B0_=D0=BD=D0=B0_=D1=81=D0=B0=D0=B9?=? =?utf-8?Q?=D1=82=D0=B5?= Kassir.RU from unknown[10.11.25.21]; from=<no-reply@kassir.ru> to=<ekdveri@gmail.com> proto=ESMTP helo=<[127.0.0.1]>"
+
+"2026-06-14T06:02:23.860Z","94.140.212.24","0 2026-06-14T09:02:23.860203+03:00 relay postfix 25300  6A34D82643: to=<ekdveri@gmail.com>, relay=gmail-smtp-in.l.google.com[64.233.161.26]:25, delay=0.43, delays=0.05/0/0.11/0.26, dsn=2.0.0, status=sent (250 2.0.0 OK  1781416943 38308e7fff4ca-39929f3b4d7si22195171fa.252 - gsmtp)"`;
+
+    function showStatus(text) {
+      statusEl.textContent = text;
+      window.clearTimeout(showStatus.timer);
+      showStatus.timer = window.setTimeout(() => statusEl.textContent = '', 1800);
+    }
+
+    function bytesToString(bytes, charset) {
+      const normalized = (charset || 'utf-8').toLowerCase().replace(/_/g, '-');
+
+      try {
+        return new TextDecoder(normalized, { fatal: false }).decode(new Uint8Array(bytes));
+      } catch (e) {
+        try {
+          return new TextDecoder('utf-8', { fatal: false }).decode(new Uint8Array(bytes));
+        } catch (fallbackError) {
+          return bytes.map(b => String.fromCharCode(b)).join('');
+        }
+      }
+    }
+
+    function decodeQ(encoded) {
+      const bytes = [];
+      for (let i = 0; i < encoded.length; i++) {
+        const ch = encoded[i];
+
+        if (ch === '_') {
+          bytes.push(0x20);
+          continue;
+        }
+
+        if (ch === '=' && /^[0-9A-Fa-f]{2}$/.test(encoded.slice(i + 1, i + 3))) {
+          bytes.push(parseInt(encoded.slice(i + 1, i + 3), 16));
+          i += 2;
+          continue;
+        }
+
+        bytes.push(ch.charCodeAt(0));
+      }
+      return bytes;
+    }
+
+    function decodeB(encoded) {
+      try {
+        const binary = atob(encoded.replace(/\s/g, ''));
+        return Array.from(binary, ch => ch.charCodeAt(0));
+      } catch (e) {
+        return [];
+      }
+    }
+
+    function decodeEncodedWord(charset, encoding, encodedText) {
+      const enc = encoding.toUpperCase();
+      const bytes = enc === 'Q' ? decodeQ(encodedText) : enc === 'B' ? decodeB(encodedText) : [];
+      return bytesToString(bytes, charset);
+    }
+
+    function decodeMimeWords(text) {
+      // RFC 2047 encoded-word:
+      // =?charset?Q?encoded?= or =?charset?B?encoded?=
+      //
+      // Важный момент: некоторые заголовки разбиваются на несколько encoded-word частей.
+      // Пробелы между такими частями нужно убрать, иначе получится лишний разрыв.
+      const encodedWord = /=\?([^?\s]+)\?([bBqQ])\?([\s\S]*?)\?=/g;
+
+      let result = '';
+      let lastIndex = 0;
+      let previousWasEncodedWord = false;
+      let match;
+
+      while ((match = encodedWord.exec(text)) !== null) {
+        const between = text.slice(lastIndex, match.index);
+
+        if (previousWasEncodedWord && /^[ \t\r\n]+$/.test(between)) {
+          // ignore whitespace between adjacent encoded-words
+        } else {
+          result += between;
+        }
+
+        result += decodeEncodedWord(match[1], match[2], match[3]);
+        lastIndex = encodedWord.lastIndex;
+        previousWasEncodedWord = true;
+      }
+
+      result += text.slice(lastIndex);
+      return result;
+    }
+
+    function decodeCsvEscapes(text) {
+      // Не полноценный CSV-парсер, а мягкая чистка типичных экранирований,
+      // чтобы лог остался похожим на исходник.
+      return text
+        .replace(/""/g, '"')
+        .replace(/\\n/g, '\n')
+        .replace(/\\t/g, '\t');
+    }
+
+    function extractUsefulFields(line) {
+      const subjectMatch = line.match(/header Subject:\s*(.*?)(?:\s+from unknown\[|\s+from=<|$)/i);
+      const fromMatch = line.match(/from=<([^>]+)>/i);
+      const toMatch = line.match(/to=<([^>]+)>/i);
+      const statusMatch = line.match(/status=([a-z]+)(?:\s|\(|$)/i);
+      const dsnMatch = line.match(/dsn=([0-9.]+)/i);
+      const queueIdMatch = line.match(/\b([A-F0-9]{8,}):\s/i);
+
+      const parts = [];
+
+      if (queueIdMatch) parts.push(`queue_id: ${queueIdMatch[1]}`);
+      if (subjectMatch) parts.push(`subject: ${subjectMatch[1].trim()}`);
+      if (fromMatch) parts.push(`from: ${fromMatch[1]}`);
+      if (toMatch) parts.push(`to: ${toMatch[1]}`);
+      if (dsnMatch) parts.push(`dsn: ${dsnMatch[1]}`);
+      if (statusMatch) parts.push(`status: ${statusMatch[1]}`);
+
+      return parts.length ? parts.join('\n') : null;
+    }
+
+    function decodeLogs() {
+      const source = input.value.trim();
+      if (!source) {
+        output.textContent = '';
+        return;
+      }
+
+      const decoded = decodeMimeWords(decodeCsvEscapes(source));
+      const lines = decoded.split(/\n+/).map(line => line.trim()).filter(Boolean);
+
+      const summaries = lines
+        .map(extractUsefulFields)
+        .filter(Boolean)
+        .map((summary, index) => `--- message ${index + 1} ---\n${summary}`)
+        .join('\n\n');
+
+      output.textContent = summaries
+        ? `${summaries}\n\n\n--- full decoded log ---\n${decoded}`
+        : decoded;
+
+      showStatus('Готово');
+    }
+
+    document.getElementById('decodeBtn').addEventListener('click', decodeLogs);
+
+    document.getElementById('copyBtn').addEventListener('click', async () => {
+      await navigator.clipboard.writeText(output.textContent || '');
+      showStatus('Скопировано');
+    });
+
+    document.getElementById('clearBtn').addEventListener('click', () => {
+      input.value = '';
+      output.textContent = '';
+      showStatus('Очищено');
+    });
+
+    document.getElementById('sampleBtn').addEventListener('click', () => {
+      input.value = sample;
+      decodeLogs();
+    });
+
+    input.addEventListener('input', decodeLogs);
+  </script>
+</body>
+</html>
