@@ -155,7 +155,7 @@
       <h1>Mail Log MIME Decoder</h1>
       <p class="lead">
         Вставьте логи Postfix/SMTP. Декодер просто заменит MIME encoded-word фрагменты
-        <code>=?utf-8?Q?...?=</code> и <code>=?utf-8?B?...?=</code> на читаемый текст, без дополнительных выводов.
+        <code>=?utf-8?Q?...?=</code> и <code>=?utf-8?B?...?=</code> на читаемый текст.
       </p>
     </header>
 
@@ -193,9 +193,8 @@
     const output = document.getElementById('output');
     const statusEl = document.getElementById('status');
 
-    const sample = `"2026-06-14T05:44:17.399Z","94.140.212.24","0 2026-06-14T08:44:17.399887+03:00 relay postfix 25138  D3F90824B3: info: header Subject: =?UTF-8?B?0JLQsNGIINC30LDQutCw0Lcg0YHQvtC30LTQsNC9IQ==?= from unknown[10.11.25.22]; from=<no-reply@kassir.ru> to=<ekdveri@gmail.com> proto=ESMTP helo=<web-all-1.kassirdev.ru>"
-"2026-06-14T06:02:23.441Z","94.140.212.24","0 2026-06-14T09:02:23.441179+03:00 relay postfix 25295  6A34D82643: info: header Subject: =?utf-8?Q?=D0=9E=D1=82=D0=BC=D0=B5=D0=BD=D0=B0_=D0=B7?=? =?utf-8?Q?=D0=B0=D0=BA=D0=B0=D0=B7=D0=B0_=D0=BD=D0=B0_=D1=81=D0=B0=D0=B9?=? =?utf-8?Q?=D1=82=D0=B5?= Kassir.RU from unknown[10.11.25.21]; from=<no-reply@kassir.ru> to=<ekdveri@gmail.com> proto=ESMTP helo=<[127.0.0.1]>"
-"2026-06-14T06:02:23.860Z","94.140.212.24","0 2026-06-14T09:02:23.860203+03:00 relay postfix 25300  6A34D82643: to=<ekdveri@gmail.com>, relay=gmail-smtp-in.l.google.com[64.233.161.26]:25, delay=0.43, delays=0.05/0/0.11/0.26, dsn=2.0.0, status=sent (250 2.0.0 OK 1781416943 38308e7fff4ca-39929f3b4d7si22195171fa.252 - gsmtp)"`;
+    const sample = `"timestamp","source","message"
+"2026-06-14T05:41:26.872Z","94.140.212.24","0 2026-06-14T08:41:26.872585+03:00 relay postfix 25010  D3F90824B3: info: header Subject: =?utf-8?Q?=D0=92=D0=B0=D1=88_=D0=B7=D0=B0=D0=BA=D0=B0?=? =?utf-8?Q?=D0=B7_=D1=81=D0=BE=D0=B7=D0=B4=D0=B0=D0=BD!?= from unknown[10.11.25.22]; from=<no-reply@kassir.ru> to=<ekdveri@gmail.com> proto=ESMTP helo=<[127.0.0.1]>"`;
 
     function showStatus(text) {
       statusEl.textContent = text;
@@ -244,9 +243,6 @@
 
     function decodeBase64ToBytes(base64) {
       let clean = base64.replace(/\s/g, '');
-
-      // При склейке нескольких encoded-word padding может оказаться в середине.
-      // Его нужно убрать и оставить padding только в конце общей строки.
       clean = clean.replace(/=+/g, '');
       while (clean.length % 4 !== 0) clean += '=';
 
@@ -256,6 +252,23 @@
       } catch (e) {
         return [];
       }
+    }
+
+    function normalizeBrokenMimeBoundaries(text) {
+      /*
+        В некоторых логах граница между двумя MIME-частями выглядит так:
+        ?=? =?utf-8?Q?...
+
+        Нормальная граница должна быть:
+        ?= =?utf-8?Q?...
+
+        Лишний знак вопроса между частями потом превращается в "? " в результате:
+        "Ваш зака? з создан!"
+
+        Здесь мы убираем этот лишний вопросительный знак только тогда,
+        когда он стоит между закрытием одного encoded-word и началом следующего.
+      */
+      return text.replace(/(\?=)\?[ \t\r\n]+(=\?[^?\s]+\?[bBqQ]\?)/g, '$1 $2');
     }
 
     function parseMimeWordAt(text, index) {
@@ -294,13 +307,11 @@
         }
 
         if (encoding === 'B') {
-          // Главное исправление: Base64-части склеиваются ДО декодирования.
-          // Так не ломаются UTF-8 символы, разрезанные между частями.
           const joinedBase64 = chunk.map(w => w.encodedText).join('');
           result += bytesToString(decodeBase64ToBytes(joinedBase64), charset);
         } else if (encoding === 'Q') {
-          const bytes = chunk.flatMap(w => decodeQToBytes(w.encodedText));
-          result += bytesToString(bytes, charset);
+          const joinedQ = chunk.map(w => w.encodedText).join('');
+          result += bytesToString(decodeQToBytes(joinedQ), charset);
         } else {
           result += chunk.map(w => w.encodedText).join('');
         }
@@ -309,7 +320,8 @@
       return result;
     }
 
-    function decodeMimeWords(text) {
+    function decodeMimeWords(sourceText) {
+      const text = normalizeBrokenMimeBoundaries(sourceText);
       let result = '';
       let i = 0;
 
