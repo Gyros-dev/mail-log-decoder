@@ -263,35 +263,71 @@
     }
 
     function decodeMimeWords(text) {
-      // RFC 2047 encoded-word:
-      // =?charset?Q?encoded?= or =?charset?B?encoded?=
-      //
-      // Важный момент: некоторые заголовки разбиваются на несколько encoded-word частей.
-      // Пробелы между такими частями нужно убрать, иначе получится лишний разрыв.
-      const encodedWord = /=\?([^?\s]+)\?([bBqQ])\?([\s\S]*?)\?=/g;
+  const encodedWord = /=\?([^?\s]+)\?([bBqQ])\?([\s\S]*?)\?=/g;
 
-      let result = '';
-      let lastIndex = 0;
-      let previousWasEncodedWord = false;
-      let match;
+  function readEncodedWordAt(str, startIndex) {
+    encodedWord.lastIndex = startIndex;
+    const match = encodedWord.exec(str);
 
-      while ((match = encodedWord.exec(text)) !== null) {
-        const between = text.slice(lastIndex, match.index);
-
-        if (previousWasEncodedWord && /^[ \t\r\n]+$/.test(between)) {
-          // ignore whitespace between adjacent encoded-words
-        } else {
-          result += between;
-        }
-
-        result += decodeEncodedWord(match[1], match[2], match[3]);
-        lastIndex = encodedWord.lastIndex;
-        previousWasEncodedWord = true;
-      }
-
-      result += text.slice(lastIndex);
-      return result;
+    if (!match || match.index !== startIndex) {
+      return null;
     }
+
+    return {
+      raw: match[0],
+      charset: match[1],
+      encoding: match[2].toUpperCase(),
+      encodedText: match[3],
+      start: match.index,
+      end: encodedWord.lastIndex
+    };
+  }
+
+  function getBytes(word) {
+    if (word.encoding === 'Q') return decodeQ(word.encodedText);
+    if (word.encoding === 'B') return decodeB(word.encodedText);
+    return [];
+  }
+
+  let result = '';
+  let index = 0;
+
+  while (index < text.length) {
+    const word = readEncodedWordAt(text, index);
+
+    if (!word) {
+      result += text[index];
+      index++;
+      continue;
+    }
+
+    const group = [word];
+    let cursor = word.end;
+
+    while (true) {
+      const whitespaceMatch = text.slice(cursor).match(/^[ \t\r\n]+/);
+      const whitespace = whitespaceMatch ? whitespaceMatch[0] : '';
+      const nextIndex = cursor + whitespace.length;
+      const nextWord = readEncodedWordAt(text, nextIndex);
+
+      if (!nextWord) break;
+
+      const sameCharset = nextWord.charset.toLowerCase() === word.charset.toLowerCase();
+      const sameEncoding = nextWord.encoding === word.encoding;
+
+      if (!sameCharset || !sameEncoding) break;
+
+      group.push(nextWord);
+      cursor = nextWord.end;
+    }
+
+    const bytes = group.flatMap(getBytes);
+    result += bytesToString(bytes, word.charset);
+    index = cursor;
+  }
+
+  return result;
+}
 
     function decodeCsvEscapes(text) {
       // Не полноценный CSV-парсер, а мягкая чистка типичных экранирований,
